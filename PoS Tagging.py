@@ -214,7 +214,10 @@ class HMM(object):
         :param sequence: sequence to predict.
         :return: sequence of PoS tags.
         """
-        # creating a viterbi probability table (representing the graph we saw in class)
+        # Creating a probability table representing a similar graph to the one learned in class.
+        # Instead of simply holding the probabilities for the corresponding node in a layer, each cell [i, j] holds a list of sums of the maximal paths leading to the cell [i, j]
+        # from the cell [i, k] in the previous layer in the graph. This way, the cell [i, j, k] holds the weight of the maximal path leading to the j'th node in he i'th layer from the k'th node in
+        # the i-1'th layer.
         probability_table = np.zeros((len(sequence), self.pos_size, self.pos_size))
         for i in range(1, len(sequence)):
             emissions = self.emission_probabilities[self.word2i[sequence[i]], :]
@@ -225,7 +228,11 @@ class HMM(object):
                 emission_p = emissions[j]
                 for k in range(self.pos_size):
                     probability_table[i, j, k] = probability_table[i-1, k, np.argmax(probability_table[i-1, k])] + np.log(self.transition_probabilities[j, k] * emission_p)
-
+        # Extracting the list of tags is done as follows:
+        # 1. We extract the cell with the highest value from the last layer. The list index is the index of the PoS tag, and the position within the list represents the index of the list in the
+        # previous layer from which the maximal path proceeded. We insert the tag received to the list of tags.
+        # 2. We iterate over the probability table in reverse order until reaching layer 1, each time we get the index of the list in the previous layer (which is the index of the highest value
+        # in the current list), and insert the PoS tag corresponding to the index of the current list to the beginning of the list of tags.
         tags = list()
         (tag_index, prev_list_index) = np.unravel_index(np.argmax(probability_table[-1]), probability_table[-1].shape)
         tags.insert(0, self.i2pos[tag_index])
@@ -234,6 +241,8 @@ class HMM(object):
             tag_index, prev_list_index = prev_list_index, np.argmax(probability_table[i, prev_list_index])
             tags.insert(0, self.i2pos[tag_index])
             i -= 1
+        # The first word of the sentence is the second edge case, and we choose the tag for it from the emission distribution over the word (since there is no transition into it).
+        # (In our case, since every sentence starts with START_WORD, the distribution should return PoS tag START_STATE with probability 1)
         tags.insert(0, np.random.choice(self.pos_tags, p=self.emission_probabilities[self.word2i[sequence[0]]]))
         return tags
 
@@ -245,8 +254,13 @@ class HMM(object):
         :return: iterable sequence of PoS tag sequences.
         """
         results = list()
+        print('Running viterbi on', len(sentences), 'sentences')
+        c = 1
         for sequence in sentences:
+            if c == 1 or not c % 50:
+                print('Starting round', c)
             results.append(self.__predict_sequence(sequence))
+            c += 1
         return results
 
 
@@ -318,7 +332,7 @@ def perceptron(training_set, initial_model, w0, eta=0.1, epochs=1):
     # TODO: YOUR CODE HERE
 
 
-def load_data(test_set_fraction=0.2, rare_threshold=5):
+def load_data(test_set_fraction=0.1, rare_threshold=5):
     # loading from files
     with open('PoS_data.pickle', 'rb') as f:
         data = pickle.load(f)
@@ -387,8 +401,17 @@ def main():
     pos, words, training_ds, test_ds = load_data()
 
     hmm_model = HMM(pos, words, training_ds)
-    print(hmm_model.viterbi([test_ds[0, 1]]))
-    print('..............................')
+    test_sentences = test_ds[:, 1]
+    test_tags = test_ds[:, 0]
+    predictions = hmm_model.viterbi(test_sentences)
+    correct_tags = 0
+    overall_tags = 0
+    for i in range(len(predictions)):
+        for t in range(len(predictions[i])):
+            overall_tags += 1
+            if predictions[i][t] == test_tags[i][t]:
+                correct_tags += 1
+    print('HMM accuracy: ', 100 * correct_tags / overall_tags, '%', sep='')
 
 
 if __name__ == '__main__':
