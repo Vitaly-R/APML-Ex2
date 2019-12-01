@@ -7,6 +7,8 @@ END_STATE = '*ENDS*'
 END_WORD = '*ENDW*'
 RARE_WORD = '*RARE_WORD*'
 
+# TODO: 1. change list of words given to the model to be list of words in training set only
+# TODO: 2. change prediction to recognize rare words.
 
 def data_example(data_path='PoS_data.pickle',
                  words_path='all_words.pickle',
@@ -408,7 +410,7 @@ def main():
     hmm_model = HMM(pos, words, training_ds)
     test_sentences = test_ds[:, 1]
     test_tags = test_ds[:, 0]
-    predictions = hmm_model.viterbi(test_sentences[:1000])
+    predictions = hmm_model.viterbi(test_sentences[:500])
     correct_tags = 0
     overall_tags = 0
     for i in range(len(predictions)):
