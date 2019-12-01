@@ -219,31 +219,32 @@ class HMM(object):
         # from the cell [i, k] in the previous layer in the graph. This way, the cell [i, j, k] holds the weight of the maximal path leading to the j'th node in he i'th layer from the k'th node in
         # the i-1'th layer.
         probability_table = np.zeros((len(sequence), self.pos_size, self.pos_size))
-        for i in range(1, len(sequence)):
+        for i in range(len(sequence)):
             emissions = self.emission_probabilities[self.word2i[sequence[i]], :]
             if np.sum(emissions) == 0:
                 # if there is no probability of this word given ANY tag, it was not learned and considered rare
                 emissions = self.emission_probabilities[self.word2i[RARE_WORD]]
             for j in range(self.pos_size):
                 emission_p = emissions[j]
-                for k in range(self.pos_size):
-                    probability_table[i, j, k] = probability_table[i-1, k, np.argmax(probability_table[i-1, k])] + np.log(self.transition_probabilities[j, k] * emission_p)
+                if i == 0:
+                    res = np.log(emission_p)
+                    probability_table[i, j] = res
+                else:
+                    for k in range(self.pos_size):
+                        probability_table[i, j, k] = probability_table[i-1, k, np.argmax(probability_table[i-1, k])] + np.log(self.transition_probabilities[j, k] * emission_p)
         # Extracting the list of tags is done as follows:
         # 1. We extract the cell with the highest value from the last layer. The list index is the index of the PoS tag, and the position within the list represents the index of the list in the
         # previous layer from which the maximal path proceeded. We insert the tag received to the list of tags.
-        # 2. We iterate over the probability table in reverse order until reaching layer 1, each time we get the index of the list in the previous layer (which is the index of the highest value
+        # 2. We iterate over the probability table in reverse order , each time we get the index of the list in the previous layer (which is the index of the highest value
         # in the current list), and insert the PoS tag corresponding to the index of the current list to the beginning of the list of tags.
         tags = list()
         (tag_index, prev_list_index) = np.unravel_index(np.argmax(probability_table[-1]), probability_table[-1].shape)
         tags.insert(0, self.i2pos[tag_index])
         i = len(sequence) - 2
-        while 0 < i:
+        while 0 <= i:
             tag_index, prev_list_index = prev_list_index, np.argmax(probability_table[i, prev_list_index])
             tags.insert(0, self.i2pos[tag_index])
             i -= 1
-        # The first word of the sentence is the second edge case, and we choose the tag for it from the emission distribution over the word (since there is no transition into it).
-        # (In our case, since every sentence starts with START_WORD, the distribution should return PoS tag START_STATE with probability 1)
-        tags.insert(0, np.random.choice(self.pos_tags, p=self.emission_probabilities[self.word2i[sequence[0]]]))
         return tags
 
     def viterbi(self, sentences):
@@ -264,7 +265,7 @@ class HMM(object):
         return results
 
 
-def hmm_mle(training_set, model):
+def hmm_mle(training_set, model: HMM):
     """
     a function for calculating the Maximum Likelihood estimation of the
     transition and emission probabilities for the standard multinomial HMM.
@@ -277,7 +278,8 @@ def hmm_mle(training_set, model):
             any other data structure you prefer.
     """
 
-    # TODO: YOUR CODE HERE
+    model.train(training_set)
+    return model.transition_probabilities, model.emission_probabilities
 
 
 class MEMM(object):
@@ -285,26 +287,29 @@ class MEMM(object):
     The base Maximum Entropy Markov Model with log-linear transition functions.
     """
 
-    def __init__(self, pos_tags, words, training_set, phi):
-        '''
+    def __init__(self, pos_tags, words, phi, training_set=None):
+        """
         The init function of the MEMM.
         :param pos_tags: the possible hidden states (POS tags)
         :param words: the possible emissions (words).
-        :param training_set: A training set of sequences of POS-tags and words.
         :param phi: the feature mapping function, which accepts two PoS tags
                     and a word, and returns a list of indices that have a "1" in
                     the binary feature vector.
-        '''
+        :param training_set: A training set of sequences of POS-tags and words.
+        """
 
         self.words = words
         self.pos_tags = pos_tags
         self.words_size = len(words)
         self.pos_size = len(pos_tags)
-        self.pos2i = {pos:i for (i,pos) in enumerate(pos_tags)}
-        self.word2i = {word:i for (i,word) in enumerate(words)}
+        self.pos2i = {pos: i for (i, pos) in enumerate(pos_tags)}
+        self.word2i = {word: i for (i, word) in enumerate(words)}
         self.phi = phi
+        if training_set is not None:
+            self.train(training_set)
 
-        # TODO: YOUR CODE HERE
+    def train(self, training_set):
+        pass
 
     def viterbi(self, sentences, w):
         """
@@ -403,7 +408,7 @@ def main():
     hmm_model = HMM(pos, words, training_ds)
     test_sentences = test_ds[:, 1]
     test_tags = test_ds[:, 0]
-    predictions = hmm_model.viterbi(test_sentences)
+    predictions = hmm_model.viterbi(test_sentences[:1000])
     correct_tags = 0
     overall_tags = 0
     for i in range(len(predictions)):
