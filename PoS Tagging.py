@@ -6,9 +6,8 @@ START_WORD = '*STW*'
 END_STATE = '*ENDS*'
 END_WORD = '*ENDW*'
 RARE_WORD = '*RARE_WORD*'
+EPSILON = 1e-10
 
-# TODO: 1. change list of words given to the model to be list of words in training set only
-# TODO: 2. change prediction to recognize rare words.
 
 def data_example(data_path='PoS_data.pickle',
                  words_path='all_words.pickle',
@@ -50,7 +49,7 @@ class Baseline(object):
     The baseline model.
     """
 
-    def __init__(self, pos_tags, words, training_set=None):
+    def __init__(self, pos_tags, words, training_set):
         """
         The init function of the baseline Model.
         :param pos_tags: the possible hidden states (POS tags)
@@ -66,8 +65,7 @@ class Baseline(object):
         self.word2i = {word: i for (i, word) in enumerate(words)}
         self.emission_probabilities = None
         self.multinomial_probabilities = None
-        if training_set is not None:
-            self.train(training_set)
+        self.train(training_set)
 
     def train(self, training_set):
         """
@@ -110,10 +108,10 @@ class Baseline(object):
         for sentence in sentences:
             result = list()
             for word in sentence:
-                p_x = self.emission_probabilities[self.word2i[word]]
-                if np.max(p_x) == 0:
-                    # in this case, the word is considered rare (since it was not encountered during training), and we take the emission probabilities of the RARE_WORD variable.
+                if word not in self.words:
                     p_x = self.emission_probabilities[self.word2i[RARE_WORD]]
+                else:
+                    p_x = self.emission_probabilities[self.word2i[word]]
                 res = self.multinomial_probabilities * p_x  # calculating P(y)*P(x|y) for each y
                 tag = np.argmax(res)  # getting the tag index
                 result.append(self.i2pos[tag])  # getting the tag itself
@@ -140,7 +138,7 @@ class HMM(object):
     The basic HMM_Model with multinomial transition functions.
     """
 
-    def __init__(self, pos_tags, words, training_set=None):
+    def __init__(self, pos_tags, words, training_set):
         """
         The init function of the basic HMM Model.
         :param pos_tags: the possible hidden states (POS tags)
@@ -157,8 +155,7 @@ class HMM(object):
         self.word2i = {word: i for (i, word) in enumerate(words)}
         self.transition_probabilities = None
         self.emission_probabilities = None
-        if training_set is not None:
-            self.train(training_set)
+        self.train(training_set)
 
     def train(self, training_set):
         sentences = training_set[:, 1]
@@ -220,12 +217,12 @@ class HMM(object):
         # Instead of simply holding the probabilities for the corresponding node in a layer, each cell [i, j] holds a list of sums of the maximal paths leading to the cell [i, j]
         # from the cell [i, k] in the previous layer in the graph. This way, the cell [i, j, k] holds the weight of the maximal path leading to the j'th node in he i'th layer from the k'th node in
         # the i-1'th layer.
-        probability_table = np.zeros((len(sequence), self.pos_size, self.pos_size))
+        probability_table = np.zeros((len(sequence), self.pos_size, self.pos_size)) + EPSILON
         for i in range(len(sequence)):
-            emissions = self.emission_probabilities[self.word2i[sequence[i]], :]
-            if np.sum(emissions) == 0:
-                # if there is no probability of this word given ANY tag, it was not learned and considered rare
+            if sequence[i] not in self.words:
                 emissions = self.emission_probabilities[self.word2i[RARE_WORD]]
+            else:
+                emissions = self.emission_probabilities[self.word2i[sequence[i]]]
             for j in range(self.pos_size):
                 emission_p = emissions[j]
                 if i == 0:
@@ -257,7 +254,7 @@ class HMM(object):
         :return: iterable sequence of PoS tag sequences.
         """
         results = list()
-        print('Running viterbi on', len(sentences), 'sentences')
+        print('Running HMM on', len(sentences), 'sentences')
         c = 1
         for sequence in sentences:
             if c == 1 or not c % 50:
@@ -289,7 +286,7 @@ class MEMM(object):
     The base Maximum Entropy Markov Model with log-linear transition functions.
     """
 
-    def __init__(self, pos_tags, words, phi, training_set=None):
+    def __init__(self, pos_tags, words, training_set):
         """
         The init function of the MEMM.
         :param pos_tags: the possible hidden states (POS tags)
@@ -299,20 +296,64 @@ class MEMM(object):
                     the binary feature vector.
         :param training_set: A training set of sequences of POS-tags and words.
         """
-
         self.words = words
         self.pos_tags = pos_tags
         self.words_size = len(words)
         self.pos_size = len(pos_tags)
         self.pos2i = {pos: i for (i, pos) in enumerate(pos_tags)}
+        self.i2pos = {i: pos for (i, pos) in enumerate(pos_tags)}
         self.word2i = {word: i for (i, word) in enumerate(words)}
-        self.phi = phi
-        # calls perceptron to learn w!
-        if training_set is not None:
-            self.train(training_set)
+        self.feature_vector_shape = (self.pos_size * self.pos_size + self.pos_size * self.words_size, 1)
+        self.w = np.zeros(self.feature_vector_shape)
+        self.w = perceptron(training_set, self, self.w)
 
-    def train(self, training_set):
-        pass
+    def phi(self, tag, prev_tag, word):
+        curr_ind = self.pos2i[tag]
+        prev_ind = self.pos2i[prev_tag]
+        word_ind = self.word2i[word]
+
+        ind1 = prev_ind + self.pos_size * curr_ind
+        ind2 = (self.pos_size * self.pos_size) + (self.pos_size * word_ind + curr_ind)
+        return np.array([ind1, ind2])
+
+    def __predict_sequence(self, sequence, w):
+        """
+        Given a sequence of words, predict its most likely PoS assignment.
+        :param sequence: sequence to predict.
+        :param w: weight vector according to which to predict.
+        :return: sequence of PoS tags.
+        """
+        # Creating a probability table representing a similar graph to the one learned in class.
+        # Instead of simply holding the probabilities for the corresponding node in a layer, each cell [i, j] holds a list of sums of the maximal paths leading to the cell [i, j]
+        # from the cell [i, k] in the previous layer in the graph. This way, the cell [i, j, k] holds the weight of the maximal path leading to the j'th node in he i'th layer from the k'th node in
+        # the i-1'th layer.
+        probability_table = np.zeros((len(sequence), self.pos_size, self.pos_size))
+        for i in range(len(sequence)):
+            word = sequence[i]
+            if word not in self.words:
+                word = RARE_WORD
+            for k in range(self.pos_size):
+                if i == 0:
+                    probability_table[i, k, :] = 0
+                else:
+                    z = np.log(np.sum(np.array([np.exp(np.sum(w[self.phi(self.i2pos[j], self.i2pos[k], word)])) for j in range(self.pos_size)])))
+                    m = probability_table[i-1, k, np.argmax(probability_table[i-1, k])]
+                    for j in range(self.pos_size):
+                        probability_table[i, j, k] = z + m + np.sum(w[self.phi(self.i2pos[j], self.i2pos[k], word)])
+        # Extracting the list of tags is done as follows:
+        # 1. We extract the cell with the highest value from the last layer. The list index is the index of the PoS tag, and the position within the list represents the index of the list in the
+        # previous layer from which the maximal path proceeded. We insert the tag received to the list of tags.
+        # 2. We iterate over the probability table in reverse order , each time we get the index of the list in the previous layer (which is the index of the highest value
+        # in the current list), and insert the PoS tag corresponding to the index of the current list to the beginning of the list of tags.
+        tags = list()
+        (tag_index, prev_list_index) = np.unravel_index(np.argmax(probability_table[-1]), probability_table[-1].shape)
+        tags.insert(0, self.i2pos[tag_index])
+        i = len(sequence) - 2
+        while 0 <= i:
+            tag_index, prev_list_index = prev_list_index, np.argmax(probability_table[i, prev_list_index])
+            tags.insert(0, self.i2pos[tag_index])
+            i -= 1
+        return tags
 
     def viterbi(self, sentences, w):
         """
@@ -322,8 +363,10 @@ class MEMM(object):
         :param w: a dictionary that maps a feature index to it's weight.
         :return: iterable sequence of POS tag sequences.
         """
-
-        # TODO: YOUR CODE HERE
+        results = list()
+        for sequence in sentences:
+            results.append(self.__predict_sequence(sequence, w))
+        return results
 
 
 def perceptron(training_set, initial_model, w0, eta=0.1, epochs=1):
@@ -337,8 +380,16 @@ def perceptron(training_set, initial_model, w0, eta=0.1, epochs=1):
     :param epochs: the amount of times to go over the entire training data (default is 1).
     :return: w, the learned weights vector for the MEMM.
     """
-    # TODO: YOUR CODE HERE
-    # calls viterbi of model!
+    w = [w0]
+    for e in range(1, epochs + 1):
+        print('epoch', e)
+        for i in range(1, len(training_set) + 1):
+            if i == 1 or not i % (len(training_set) // 10):
+                print('round', i)
+            tags, sentence = training_set[i-1]
+            predictions = initial_model.viterbi([sentence], w[i-1])[0]
+            w.append(w[i-1] + eta * np.sum([initial_model.phi(tags[j], tags[j-1], sentence[j]) - initial_model.phi(predictions[j], predictions[j-1], sentence[j]) for j in range(len(tags))]))
+    return np.average(np.array(w), axis=0)
 
 
 def load_data(test_set_fraction=0.1, rare_threshold=5):
@@ -357,11 +408,11 @@ def load_data(test_set_fraction=0.1, rare_threshold=5):
     pos.append(END_STATE)
 
     # adding start/end words, and start/end tags to each sentence:
-    for i in range(len(data)):
-        data[i][1].insert(0, START_WORD)
-        data[i][1].append(END_WORD)
-        data[i][0].insert(0, START_STATE)
-        data[i][0].append(END_STATE)
+    for (tag_list, sentence) in data:
+        sentence.insert(0, START_WORD)
+        sentence.append(END_WORD)
+        tag_list.insert(0, START_STATE)
+        tag_list.append(END_STATE)
 
     # splitting into training set and test set:
     data = np.array(data)
@@ -384,15 +435,14 @@ def load_data(test_set_fraction=0.1, rare_threshold=5):
                 word_count[RARE_WORD] += word_count[sentence[i]]
                 word_count.pop(sentence[i])
                 sentence[i] = RARE_WORD
-
-    words = np.array(words)
+    word_count = {word: count for (word, count) in word_count.items() if count > 0}
+    words = np.array(list(word_count.keys()))
     pos = np.array(pos)
     return pos, words, training_ds, test_ds
 
 
-def run_baseline_model(pos, words, training_ds, test_ds):
-    bl_model = Baseline(pos, words)
-    _, _ = baseline_mle(training_ds, bl_model)
+def run_baseline(pos, words, training_ds, test_ds):
+    bl_model = Baseline(pos, words, training_ds)
     test_sentences = test_ds[:, 1]
     test_tags = test_ds[:, 0]
     test_predictions = bl_model.MAP(test_sentences)
@@ -406,9 +456,7 @@ def run_baseline_model(pos, words, training_ds, test_ds):
     print('Baseline model accuracy: ', 100 * correct_tags / overall_tags, '%', sep='')
 
 
-def main():
-    pos, words, training_ds, test_ds = load_data()
-
+def run_hmm(pos, words, training_ds, test_ds):
     hmm_model = HMM(pos, words, training_ds)
     test_sentences = test_ds[:, 1]
     test_tags = test_ds[:, 0]
@@ -421,6 +469,26 @@ def main():
             if predictions[i][t] == test_tags[i][t]:
                 correct_tags += 1
     print('HMM accuracy: ', 100 * correct_tags / overall_tags, '%', sep='')
+
+
+def run_memm(pos, words, training_ds, test_ds):
+    memm_model = MEMM(pos, words, training_ds[: 100])
+    test_sentences = test_ds[:, 1]
+    predictions = memm_model.viterbi(test_sentences[:100], memm_model.w)
+    test_tags = test_ds[:, 0]
+    correct_tags = 0
+    overall_tags = 0
+    for i in range(len(predictions)):
+        for t in range(len(predictions[i])):
+            overall_tags += 1
+            if predictions[i][t] == test_tags[i][t]:
+                correct_tags += 1
+    print('MEMM accuracy: ', 100 * correct_tags / overall_tags, '%', sep='')
+
+
+def main():
+    pos, words, training_ds, test_ds = load_data()
+    run_memm(pos, words, training_ds, test_ds)
 
 
 if __name__ == '__main__':
