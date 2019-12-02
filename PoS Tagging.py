@@ -307,6 +307,7 @@ class MEMM(object):
         self.pos2i = {pos: i for (i, pos) in enumerate(pos_tags)}
         self.word2i = {word: i for (i, word) in enumerate(words)}
         self.phi = phi
+        # calls perceptron to learn w!
         if training_set is not None:
             self.train(training_set)
 
@@ -337,6 +338,7 @@ def perceptron(training_set, initial_model, w0, eta=0.1, epochs=1):
     :return: w, the learned weights vector for the MEMM.
     """
     # TODO: YOUR CODE HERE
+    # calls viterbi of model!
 
 
 def load_data(test_set_fraction=0.1, rare_threshold=5):
