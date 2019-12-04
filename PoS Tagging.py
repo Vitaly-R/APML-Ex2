@@ -303,18 +303,31 @@ class MEMM(object):
         self.pos2i = {pos: i for (i, pos) in enumerate(pos_tags)}
         self.i2pos = {i: pos for (i, pos) in enumerate(pos_tags)}
         self.word2i = {word: i for (i, word) in enumerate(words)}
-        self.feature_vector_shape = (self.pos_size * self.pos_size + self.pos_size * self.words_size, )
+        self.feature_vector_shape = (self.pos_size * self.pos_size + self.pos_size * self.words_size + 5, )
         self.w = np.zeros(self.feature_vector_shape)
         self.w = perceptron(training_set, self, self.w)
 
-    def phi(self, tag, prev_tag, word):
+    def phi(self, tag, prev_tag, word, as_vector=False):
+        res_vec = np.zeros(self.feature_vector_shape)
         curr_ind = self.pos2i[tag]
         prev_ind = self.pos2i[prev_tag]
         word_ind = self.word2i[word]
+        res = list()
+        res.append(prev_ind + self.pos_size * curr_ind)
+        res.append((self.pos_size * self.pos_size) + (self.pos_size * word_ind + curr_ind))
+        if word.endswith('ing'):
+            res.append(self.pos_size * self.pos_size + self.pos_size * self.words_size)
+        elif word.endswith('ed'):
+            res.append(self.pos_size * self.pos_size + self.pos_size * self.words_size + 1)
+        elif word.endswith('tion'):
+            res.append(self.pos_size * self.pos_size + self.pos_size * self.words_size + 2)
+        elif word.endswith('sion'):
+            res.append(self.pos_size * self.pos_size + self.pos_size * self.words_size + 3)
+        if word.lower() in ['a', 'the', 'and', 'is', 'are']:
+            res.append(self.pos_size * self.pos_size + self.pos_size * self.words_size + 4)
+        res_vec[res] = 1
 
-        ind1 = prev_ind + self.pos_size * curr_ind
-        ind2 = (self.pos_size * self.pos_size) + (self.pos_size * word_ind + curr_ind)
-        return np.array([ind1, ind2])
+        return res_vec if as_vector else res
 
     def __predict_sequence(self, sequence, w):
         """
@@ -323,10 +336,7 @@ class MEMM(object):
         :param w: weight vector according to which to predict.
         :return: sequence of PoS tags.
         """
-        # Creating a probability table representing a similar graph to the one learned in class.
-        # Instead of simply holding the probabilities for the corresponding node in a layer, each cell [i, j] holds a list of sums of the maximal paths leading to the cell [i, j]
-        # from the cell [i, k] in the previous layer in the graph. This way, the cell [i, j, k] holds the weight of the maximal path leading to the j'th node in he i'th layer from the k'th node in
-        # the i-1'th layer.
+
         probability_table = np.zeros((len(sequence), self.pos_size, self.pos_size))
         for i in range(len(sequence)):
             word = sequence[i]
@@ -336,15 +346,13 @@ class MEMM(object):
                 if i == 0:
                     probability_table[i, k, :] = 0
                 else:
-                    z = np.log(np.sum(np.array([np.exp(np.sum(w[self.phi(self.i2pos[j], self.i2pos[k], word)])) for j in range(self.pos_size)])))
-                    m = probability_table[i-1, k, np.argmax(probability_table[i-1, k])]
+                    dot_res = np.array([w[self.phi(self.i2pos[j], self.i2pos[k], word)].sum() for j in range(self.pos_size)])
+                    z = np.log(np.sum(np.exp(dot_res)))
+                    m = probability_table[i-1, k]
+                    s = m + dot_res
                     for j in range(self.pos_size):
-                        probability_table[i, j, k] = m + np.sum(w[self.phi(self.i2pos[j], self.i2pos[k], word)]) - z
-        # Extracting the list of tags is done as follows:
-        # 1. We extract the cell with the highest value from the last layer. The list index is the index of the PoS tag, and the position within the list represents the index of the list in the
-        # previous layer from which the maximal path proceeded. We insert the tag received to the list of tags.
-        # 2. We iterate over the probability table in reverse order , each time we get the index of the list in the previous layer (which is the index of the highest value
-        # in the current list), and insert the PoS tag corresponding to the index of the current list to the beginning of the list of tags.
+                        probability_table[i, j, k] = s.max() - z
+
         tags = list()
         (tag_index, prev_list_index) = np.unravel_index(np.argmax(probability_table[-1]), probability_table[-1].shape)
         tags.insert(0, self.i2pos[tag_index])
@@ -369,7 +377,7 @@ class MEMM(object):
         return results
 
 
-def perceptron(training_set, initial_model, w0, eta=0.1, epochs=2):
+def perceptron(training_set, initial_model, w0, eta=0.1, epochs=1):
     """
     learn the weight vector of a log-linear model according to the training set.
     :param training_set: iterable sequence of sentences and their parts-of-speech.
@@ -384,11 +392,11 @@ def perceptron(training_set, initial_model, w0, eta=0.1, epochs=2):
     for e in range(1, epochs + 1):
         print('epoch', e)
         for i in range(1, len(training_set) + 1):
-            if i == 1 or not i % (len(training_set) // 10):
-                print('round', i)
+            print('round', i) if i == 1 or not i % (len(training_set) // 10) else None
             tags, sentence = training_set[i-1]
             predictions = initial_model.viterbi([sentence], w[i-1])[0]
-            w.append(w[i-1] + eta * np.sum([initial_model.phi(tags[j], tags[j-1], sentence[j]) - initial_model.phi(predictions[j], predictions[j-1], sentence[j]) for j in range(len(tags))]))
+            step = eta * np.sum([initial_model.phi(tags[j], tags[j-1], sentence[j], True) - initial_model.phi(predictions[j], predictions[j-1], sentence[j], True) for j in range(len(tags))])
+            w.append(w[i-1] + step)
     return np.average(np.array(w), axis=0)
 
 
@@ -472,7 +480,7 @@ def run_hmm(pos, words, training_ds, test_ds):
 
 
 def run_memm(pos, words, training_ds, test_ds):
-    memm_model = MEMM(pos, words, training_ds[: 1000])
+    memm_model = MEMM(pos, words, training_ds[: 100])
     test_sentences = test_ds[:, 1]
     predictions = memm_model.viterbi(test_sentences[:100], memm_model.w)
     test_tags = test_ds[:, 0]
